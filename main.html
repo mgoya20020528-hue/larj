@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>我们的时光轴</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root { --pink: #ffc0cb; --bg: #fdf5f5; --text: #444; }
+        * { box-sizing: border-box; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+        body { background: var(--bg); margin: 0; color: var(--text); padding-bottom: 100px; }
+        header { text-align: center; padding: 40px 20px; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.03); }
+        h1 { font-weight: 300; letter-spacing: 2px; margin: 0; font-size: 24px; }
+        
+        #sync-status { font-size: 10px; color: #bbb; margin-top: 5px; }
+        #timeline { width: 90%; max-width: 500px; border-left: 2px solid var(--pink); margin: 30px auto; padding-left: 25px; position: relative; }
+        
+        .card { background: white; border-radius: 16px; padding: 15px; margin-bottom: 30px; box-shadow: 0 5px 15px rgba(0,0,0,0.03); position: relative; }
+        .card::after { content: '❤'; position: absolute; left: -37px; top: 12px; width: 22px; height: 22px; background: white; border: 2px solid var(--pink); border-radius: 50%; color: var(--pink); font-size: 10px; text-align: center; line-height: 20px; }
+        
+        .card img { width: 100%; border-radius: 12px; margin-bottom: 10px; display: block; object-fit: cover; max-height: 400px; cursor: pointer; }
+        .del-btn { position: absolute; top: 10px; right: 10px; border: none; background: none; color: #eee; cursor: pointer; font-size: 20px; transition: 0.3s; }
+        .del-btn:hover { color: #ff4d4f; }
+        
+        .date { font-size: 11px; color: #bbb; margin-bottom: 4px; font-weight: bold; }
+        .title { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+        .content { font-size: 14px; line-height: 1.6; color: #666; white-space: pre-wrap; }
+
+        .add-btn { position: fixed; bottom: 30px; right: 30px; width: 56px; height: 56px; background: var(--pink); color: white; border-radius: 50%; border: none; font-size: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); cursor: pointer; z-index: 100; }
+        
+        /* 弹窗样式 */
+        .mask { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 1000; }
+        .dialog { background: white; padding: 25px; border-radius: 24px; width: 90%; max-width: 400px; display: flex; flex-direction: column; gap: 15px; }
+        input, textarea { padding: 12px; border: 1px solid #eee; border-radius: 10px; width: 100%; outline: none; }
+        .save-btn { background: var(--pink); color: white; border: none; padding: 14px; border-radius: 12px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>我们的时光轴</h1>
+    <div id="sync-status">正在连接云端数据库...</div>
+</header>
+
+<div id="timeline"></div>
+
+<button class="add-btn" onclick="openAdd()">+</button>
+
+<div id="addModal" class="mask">
+    <div class="dialog">
+        <h3 style="margin:0">记录新的瞬间</h3>
+        <input type="date" id="dateIn">
+        <input type="text" id="titleIn" placeholder="标题">
+        <textarea id="contentIn" placeholder="写下想说的话..." rows="4"></textarea>
+        <input type="file" id="imgIn" accept="image/*">
+        <button class="save-btn" onclick="save()" id="submitBtn">同步到云端</button>
+        <button onclick="closeAdd()" style="background:none; border:none; color:#ccc; cursor:pointer;">取消</button>
+    </div>
+</div>
+
+<script>
+    // --- 2. 填写你的配置信息 ---
+    const SB_URL = 'https://gttolregcpptszmyqoeq.supabase.co'; 
+    const SB_KEY = 'sb_publishable_1XQyLd2oP1XoWNzTY6MoXA_Z0rzkCx-'; 
+
+    // 初始化客户端
+    const supabaseClient = supabase.createClient(SB_URL, SB_KEY);
+
+    document.getElementById('dateIn').valueAsDate = new Date();
+    function openAdd() { document.getElementById('addModal').style.display = 'flex'; }
+    function closeAdd() { document.getElementById('addModal').style.display = 'none'; }
+
+    // 从云端获取数据
+    async function fetchMoments() {
+        const { data, error } = await supabaseClient.from('moments').select('*').order('date', { ascending: false });
+        if (data) {
+            render(data);
+            document.getElementById('sync-status').innerText = '数据已实时同步于 ' + new Date().toLocaleTimeString();
+        } else {
+            document.getElementById('sync-status').innerText = '未发现记录或数据库未配置';
+        }
+    }
+
+    // 图片压缩逻辑
+    async function compress(file) {
+        return new Promise(res => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = e => {
+                const img = new Image();
+                img.src = e.target.result;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    let w = img.width, h = img.height;
+                    if(w > 1000) { h = h * (1000/w); w = 1000; }
+                    canvas.width = w; canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    res(canvas.toDataURL('image/jpeg', 0.8));
+                }
+            }
+        });
+    }
+
+    // 保存记录
+    async function save() {
+        const btn = document.getElementById('submitBtn');
+        const f = document.getElementById('imgIn').files[0];
+        btn.innerText = "同步中..."; btn.disabled = true;
+
+        try {
+            let b64 = f ? await compress(f) : "";
+            const { error } = await supabaseClient.from('moments').insert([{
+                date: document.getElementById('dateIn').value,
+                title: document.getElementById('titleIn').value,
+                content: document.getElementById('contentIn').value,
+                img: b64
+            }]);
+
+            if (error) throw error;
+            closeAdd();
+            fetchMoments();
+        } catch (e) {
+            alert("同步出错: " + e.message);
+        } finally {
+            btn.innerText = "同步到云端"; btn.disabled = false;
+        }
+    }
+
+    // 删除记录
+    async function del(id) {
+        if (confirm("确定要删除这条回忆吗？")) {
+            await supabaseClient.from('moments').delete().eq('id', id);
+            fetchMoments();
+        }
+    }
+
+    function render(data) {
+        const container = document.getElementById('timeline');
+        if(data.length === 0) {
+            container.innerHTML = '<p style="text-align:center; color:#ccc;">暂无回忆，点击 + 开始记录</p>';
+            return;
+        }
+        container.innerHTML = data.map(m => `
+            <div class="card">
+                <button class="del-btn" onclick="del(${m.id})">×</button>
+                ${m.img ? `<img src="${m.img}" onclick="window.open(this.src)">` : ''}
+                <div class="date">${m.date}</div>
+                <div class="title">${m.title}</div>
+                <div class="content">${m.content}</div>
+            </div>
+        `).join('');
+    }
+
+    fetchMoments();
+</script>
+</body>
+</html>
