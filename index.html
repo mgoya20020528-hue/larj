@@ -25,13 +25,15 @@
 
         .add-btn { position: fixed; bottom: 30px; right: 30px; width: 56px; height: 56px; background: var(--pink); color: white; border-radius: 50%; border: none; font-size: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); cursor: pointer; z-index: 100; }
         
-        /* 弹窗遮罩 */
         .mask { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 1000; }
         .dialog { background: white; padding: 25px; border-radius: 24px; width: 90%; max-width: 400px; display: flex; flex-direction: column; gap: 15px; }
         input, textarea { padding: 12px; border: 1px solid #eee; border-radius: 10px; width: 100%; outline: none; }
         .save-btn { background: var(--pink); color: white; border: none; padding: 14px; border-radius: 12px; font-weight: bold; cursor: pointer; }
 
-        /* 图片放大预览 */
+        .action-box { display: flex; gap: 10px; margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee; }
+        .action-btn { background: #fdfdfd; border: 1px solid #eee; border-radius: 15px; padding: 4px 10px; cursor: pointer; font-size: 12px; color: #888; }
+        .comment-item { font-size: 13px; color: #666; margin-top: 5px; background: #fafafa; padding: 5px 8px; border-radius: 8px; }
+        
         #imgPreview { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; justify-content: center; align-items: center; cursor: zoom-out; }
         #imgPreview img { max-width: 95%; max-height: 95%; border-radius: 8px; }
     </style>
@@ -64,24 +66,95 @@
 </div>
 
 <script>
-    // --- 配置区 (请在这里填入你的钥匙) ---
     const SB_URL = 'https://gttolregcpptszmyqoeq.supabase.co'; 
-    const SB_KEY = 'sb_publishable_1XQyLd2oP1XoWNzTY6MoXA_Z0rzkCx-';
-
+    const SB_KEY = 'sb_publishable_1XQyLd2oP1XoWNzTY6MoXA_Z0rzkCx-'; // 请替换为你的安全Key
     const supabaseClient = supabase.createClient(SB_URL, SB_KEY);
 
     document.getElementById('dateIn').valueAsDate = new Date();
     function openAdd() { document.getElementById('addModal').style.display = 'flex'; }
     function closeAdd() { document.getElementById('addModal').style.display = 'none'; }
 
-    // 加载数据
     async function fetchMoments() {
-        const { data, error } = await supabaseClient.from('moments').select('*').order('date', { ascending: false });
-        if (data) render(data);
+        const [momentsRes, commentsRes] = await Promise.all([
+            supabaseClient.from('moments').select('*').order('date', { ascending: false }),
+            supabaseClient.from('comments').select('*')
+        ]);
+        if (momentsRes.data) {
+            window.allComments = commentsRes.data || [];
+            render(momentsRes.data);
+        }
         document.getElementById('sync-status').innerText = '已实时同步：' + new Date().toLocaleTimeString();
     }
 
-    // 压缩图片
+    async function addLike(id, currentLikes) {
+    // 1. 获取当前卡片的按钮，并立即修改 UI
+    const likeBtn = event.target;
+    likeBtn.innerText = `❤️ ${currentLikes + 1}`;
+    likeBtn.disabled = true; // 防止重复点击
+
+    // 2. 异步同步到数据库，不等待结果
+    supabaseClient
+        .from('moments')
+        .update({ likes: currentLikes + 1 })
+        .eq('id', id)
+        .then(({ error }) => {
+            if (error) {
+                alert("同步失败，请检查网络");
+                likeBtn.innerText = `❤️ ${currentLikes}`; // 如果失败则恢复原样
+            }
+        });
+}
+
+// 优化：评论 - 立即在前端添加评论 DOM，后台异步同步
+async function addComment(momentId) {
+    const text = prompt("你想说点什么？");
+    if (!text) return;
+
+    // 1. 立即在前端渲染出这行评论，不等待请求完成
+    const container = document.getElementById(`comments-${momentId}`);
+    const div = document.createElement('div');
+    div.className = 'comment-item';
+    div.innerText = text;
+    container.appendChild(div);
+
+    // 2. 异步插入数据库
+    supabaseClient
+        .from('comments')
+        .insert([{ moment_id: momentId, content: text }])
+        .then(({ error }) => {
+            if (error) {
+                alert("评论发送失败");
+                container.removeChild(div); // 如果失败，从界面移除
+            }
+        });
+}
+
+    async function addComment(momentId) {
+    const text = prompt("你想说点什么？");
+    if (!text) return;
+
+    // 1. 获取对应的评论容器
+    const container = document.getElementById(`comments-${momentId}`);
+    
+    // 2. 立即在前端创建并插入评论 DOM，实现点击即显示
+    const div = document.createElement('div');
+    div.className = 'comment-item';
+    div.innerText = text;
+    container.appendChild(div);
+
+    // 3. 后台异步插入数据库，不阻塞页面交互
+    supabaseClient
+        .from('comments')
+        .insert([{ moment_id: momentId, content: text }])
+        .then(({ error }) => {
+            if (error) {
+                // 如果同步失败，提示用户并回滚刚才的 UI 更新
+                alert("评论发送失败：" + error.message);
+                container.removeChild(div); 
+            }
+        });
+}
+
     async function compress(file) {
         return new Promise(res => {
             const reader = new FileReader();
@@ -101,7 +174,6 @@
         });
     }
 
-    // 保存
     async function save() {
         const btn = document.getElementById('submitBtn');
         const f = document.getElementById('imgIn').files[0];
@@ -112,7 +184,8 @@
                 date: document.getElementById('dateIn').value,
                 title: document.getElementById('titleIn').value,
                 content: document.getElementById('contentIn').value,
-                img: b64
+                img: b64,
+                likes: 0
             }]);
             if (error) throw error;
             closeAdd();
@@ -121,7 +194,6 @@
         finally { btn.innerText = "同步到云端"; btn.disabled = false; }
     }
 
-    // 删除
     async function del(id) {
         if (confirm("确定删除这条回忆吗？")) {
             await supabaseClient.from('moments').delete().eq('id', id);
@@ -129,7 +201,6 @@
         }
     }
 
-    // 图片放大
     function openPreview(src) {
         const p = document.getElementById('imgPreview');
         p.querySelector('img').src = src;
@@ -138,15 +209,27 @@
 
     function render(data) {
         const container = document.getElementById('timeline');
-        container.innerHTML = data.map(m => `
-            <div class="card">
-                <button class="del-btn" onclick="del(${m.id})">×</button>
-                ${m.img ? `<img src="${m.img}" onclick="openPreview(this.src)">` : ''}
-                <div class="date">${m.date}</div>
-                <div class="title">${m.title}</div>
-                <div class="content">${m.content}</div>
-            </div>
-        `).join('');
+        const comments = window.allComments || [];
+        
+        container.innerHTML = data.map(m => {
+            const mComments = comments.filter(c => String(c.moment_id) === String(m.id));
+            return `
+                <div class="card">
+                    <button class="del-btn" onclick="del(${m.id})">×</button>
+                    ${m.img ? `<img src="${m.img}" onclick="openPreview(this.src)">` : ''}
+                    <div class="date">${m.date}</div>
+                    <div class="title">${m.title}</div>
+                    <div class="content">${m.content}</div>
+                    <div class="action-box">
+                        <button class="action-btn" onclick="addLike(${m.id}, ${m.likes || 0})">❤️ ${m.likes || 0}</button>
+                        <button class="action-btn" onclick="addComment(${m.id})">💬 评论</button>
+                    </div>
+                    <div id="comments-${m.id}">
+                        ${mComments.map(c => `<div class="comment-item">${c.content}</div>`).join('')}
+                    </div>
+                </div>
+            `;
+        }).join('');
     }
 
     fetchMoments();
